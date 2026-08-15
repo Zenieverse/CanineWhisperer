@@ -1,0 +1,11 @@
+{
+  "name": "CanineWhisper AI - The Intelligent Dog Whisperer",
+  "description": "Multi-modal AI Dog Whisperer powered by Google Gemini 2.5/Flash vision & acoustic analysis, ElevenLabs canine voice synthesis, Snowflake behavioral data warehouse analytics, and Solana on-chain pet identity & training certifications.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

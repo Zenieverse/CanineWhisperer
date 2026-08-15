@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+body {
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  background-color: #FAF9F6;
+  color: #1A1A1A;
+}
+
+h1, h2, h3, .font-serif, .editorial-heading {
+  font-family: 'Newsreader', Georgia, Cambria, 'Times New Roman', Times, serif;
+}
+
+code, kbd, samp, pre, .font-mono {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+/* Editorial design accents */
+.editorial-border {
+  border: 1px solid #1A1A1A;
+}
+
+.editorial-divider {
+  border-color: #1A1A1A;
+}
+
+.editorial-subhead {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 0.65rem;
+  font-weight: 700;
+}
+
