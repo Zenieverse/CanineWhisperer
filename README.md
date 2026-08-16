@@ -1,6 +1,9 @@
 # 🐾 Canine AI Whisperer
 ### *Multimodal Veterinary Ethology, Bio-Acoustics & Behavioral Intelligence Platform*
 
+<img width="1600" height="1200" alt="IMG_1982" src="https://github.com/user-attachments/assets/b91efba1-1860-49ae-984e-dc140878910b" />
+Testing the applet with my bruised twintoes pic and it spotted right away...
+
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue.svg?logo=typescript)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-19.0-61dafb.svg?logo=react)](https://react.dev/)
 [![Tailwind CSS v4](https://img.shields.io/badge/TailwindCSS-v4.1-38bdf8.svg?logo=tailwindcss)](https://tailwindcss.com/)
