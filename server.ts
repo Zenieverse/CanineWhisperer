@@ -1,19 +1,70 @@
 import express from 'express';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
+import {
+  Connection,
+  PublicKey,
+  Keypair,
+  Transaction,
+  TransactionInstruction,
+  SystemProgram,
+  LAMPORTS_PER_SOL,
+  sendAndConfirmTransaction,
+  clusterApiUrl
+} from '@solana/web3.js';
+import bs58Module from 'bs58';
+
+const bs58 = (bs58Module as any).default || bs58Module;
 
 dotenv.config();
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = 3000;
 
 app.use(express.json({ limit: '25mb' }));
+
+// ----------------------------------------------------
+// Solana Devnet Web3 Infrastructure
+// ----------------------------------------------------
+const rawRpc = process.env.SOLANA_RPC_URL?.trim();
+const SOLANA_DEVNET_RPC = (rawRpc && (rawRpc.startsWith('http://') || rawRpc.startsWith('https://'))) 
+  ? rawRpc 
+  : 'https://api.devnet.solana.com';
+const solanaConnection = new Connection(SOLANA_DEVNET_RPC, 'confirmed');
+const MEMO_PROGRAM_ID = new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr');
+
+// Server-side Canine Verification Authority Keypair
+let serverAuthorityKeypair: Keypair;
+try {
+  if (process.env.SOLANA_SERVER_SECRET_KEY) {
+    serverAuthorityKeypair = Keypair.fromSecretKey(bs58.decode(process.env.SOLANA_SERVER_SECRET_KEY));
+  } else {
+    serverAuthorityKeypair = Keypair.generate();
+  }
+} catch {
+  serverAuthorityKeypair = Keypair.generate();
+}
+
+console.log(`[Solana Devnet] Verification Authority Pubkey: ${serverAuthorityKeypair.publicKey.toBase58()}`);
+
+// Auto-fund authority on Devnet if low balance
+async function ensureSolFunding(keypair: Keypair) {
+  try {
+    const balance = await solanaConnection.getBalance(keypair.publicKey);
+    if (balance < 0.05 * LAMPORTS_PER_SOL) {
+      console.log(`[Solana Devnet] Requesting initial airdrop for authority ${keypair.publicKey.toBase58()}...`);
+      const airdropSig = await solanaConnection.requestAirdrop(keypair.publicKey, 1 * LAMPORTS_PER_SOL);
+      const latestBlock = await solanaConnection.getLatestBlockhash();
+      await solanaConnection.confirmTransaction({ signature: airdropSig, ...latestBlock }, 'confirmed');
+      console.log(`[Solana Devnet] Authority airdrop confirmed: ${airdropSig}`);
+    }
+  } catch (err: any) {
+    console.warn(`[Solana Devnet] Authority auto-airdrop notice: ${err?.message || err}`);
+  }
+}
+ensureSolFunding(serverAuthorityKeypair).catch(() => {});
 
 // Lazy Google Gen AI helper
 let aiClient: GoogleGenAI | null = null;
@@ -361,26 +412,280 @@ app.post('/api/snowflake/execute', async (req, res) => {
   }
 });
 
-// 7. Solana Canine Identity & Web3 Certificate Issuer
+// 7. Solana Real Devnet Blockchain Endpoints
+app.get('/api/solana/authority', async (req, res) => {
+  try {
+    const pubkey = serverAuthorityKeypair.publicKey.toBase58();
+    const balanceLamports = await solanaConnection.getBalance(serverAuthorityKeypair.publicKey).catch(() => 0);
+    return res.json({
+      authorityAddress: pubkey,
+      balanceSol: +(balanceLamports / LAMPORTS_PER_SOL).toFixed(4),
+      cluster: 'devnet',
+      rpc: SOLANA_DEVNET_RPC
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Generate fresh keypair
+app.post('/api/solana/create-wallet', (req, res) => {
+  try {
+    const newKeypair = Keypair.generate();
+    return res.json({
+      publicKey: newKeypair.publicKey.toBase58(),
+      secretKeyBase58: bs58.encode(newKeypair.secretKey),
+      cluster: 'devnet'
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Query live Devnet balance
+app.post('/api/solana/balance', async (req, res) => {
+  try {
+    const { address } = req.body;
+    if (!address) {
+      return res.status(400).json({ error: 'Solana public key address is required' });
+    }
+
+    const pubkey = new PublicKey(address);
+    const balanceLamports = await solanaConnection.getBalance(pubkey);
+    const balanceSol = +(balanceLamports / LAMPORTS_PER_SOL).toFixed(4);
+
+    return res.json({
+      address: pubkey.toBase58(),
+      balanceSol,
+      lamports: balanceLamports,
+      cluster: 'devnet',
+      rpc: SOLANA_DEVNET_RPC
+    });
+  } catch (error: any) {
+    console.error('Error fetching Solana balance:', error);
+    res.status(400).json({ error: error.message || 'Invalid Solana address' });
+  }
+});
+
+// Request real Devnet airdrop
+app.post('/api/solana/airdrop', async (req, res) => {
+  try {
+    const { address, amountSol = 1 } = req.body;
+    if (!address) {
+      return res.status(400).json({ error: 'Solana address required' });
+    }
+
+    const pubkey = new PublicKey(address);
+    console.log(`[Solana Devnet] Requesting ${amountSol} SOL airdrop for ${pubkey.toBase58()}...`);
+    
+    let txSig: string;
+    try {
+      txSig = await solanaConnection.requestAirdrop(pubkey, amountSol * LAMPORTS_PER_SOL);
+      const latestBlockhash = await solanaConnection.getLatestBlockhash();
+      await solanaConnection.confirmTransaction({
+        signature: txSig,
+        ...latestBlockhash
+      }, 'confirmed');
+    } catch (airdropErr: any) {
+      console.warn(`[Solana Devnet] Direct airdrop RPC notice: ${airdropErr?.message}`);
+      // If devnet public faucet rate-limits, transfer from funded authority keypair if authority has funds
+      await ensureSolFunding(serverAuthorityKeypair);
+      const authBalance = await solanaConnection.getBalance(serverAuthorityKeypair.publicKey);
+      if (authBalance >= 0.1 * LAMPORTS_PER_SOL) {
+        const transferTx = new Transaction().add(
+          SystemProgram.transfer({
+            fromPubkey: serverAuthorityKeypair.publicKey,
+            toPubkey: pubkey,
+            lamports: 0.1 * LAMPORTS_PER_SOL
+          })
+        );
+        txSig = await sendAndConfirmTransaction(solanaConnection, transferTx, [serverAuthorityKeypair], {
+          commitment: 'confirmed'
+        });
+      } else {
+        throw new Error('Solana Devnet faucet rate limit reached. Please retry in a moment or visit faucet.solana.com');
+      }
+    }
+
+    const newBalanceLamports = await solanaConnection.getBalance(pubkey);
+    const newBalanceSol = +(newBalanceLamports / LAMPORTS_PER_SOL).toFixed(4);
+
+    return res.json({
+      success: true,
+      txHash: txSig,
+      balanceSol: newBalanceSol,
+      explorerUrl: `https://explorer.solana.com/tx/${txSig}?cluster=devnet`,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    console.error('Error in Solana airdrop:', error);
+    res.status(500).json({ error: error.message || 'Failed to process Devnet airdrop' });
+  }
+});
+
+// Mint Real Canine Digital Passport (cNFT / On-Chain Memo Record on Devnet)
 app.post('/api/solana/mint-passport', async (req, res) => {
   try {
-    const { dogProfile, publicKey } = req.body;
+    const { dogProfile, publicKey, secretKeyBase58 } = req.body;
+    await ensureSolFunding(serverAuthorityKeypair);
 
-    const txSignature = `5Yt${Math.random().toString(36).substring(2, 15)}K8q${Math.random().toString(36).substring(2, 15)}Sol`;
+    // Determine signer keypair (user's or server authority)
+    let signer = serverAuthorityKeypair;
+    if (secretKeyBase58) {
+      try {
+        signer = Keypair.fromSecretKey(bs58.decode(secretKeyBase58));
+      } catch {
+        signer = serverAuthorityKeypair;
+      }
+    }
+
+    const targetPubkey = publicKey ? new PublicKey(publicKey) : signer.publicKey;
     const certificateId = `SOL-CGC-${Math.floor(100000 + Math.random() * 900000)}`;
+
+    const passportMetadata = {
+      protocol: 'CANINE_AI_WHISPERER_V1',
+      action: 'MINT_PASSPORT_CNFT',
+      certificateId,
+      owner: targetPubkey.toBase58(),
+      dogId: dogProfile?.id || 'canine_1',
+      name: dogProfile?.name || 'Canine',
+      breed: dogProfile?.breed || 'Canine',
+      microchipId: dogProfile?.microchipId || '985141002948201',
+      ageYears: dogProfile?.ageYears || 3,
+      trainingLevel: dogProfile?.trainingLevel || 'Canine Good Citizen',
+      treatsEarned: dogProfile?.treatsEarned || 0,
+      timestamp: new Date().toISOString()
+    };
+
+    const memoText = JSON.stringify(passportMetadata);
+
+    const transaction = new Transaction();
+    transaction.add(
+      new TransactionInstruction({
+        keys: [{ pubkey: signer.publicKey, isSigner: true, isWritable: true }],
+        programId: MEMO_PROGRAM_ID,
+        data: Buffer.from(memoText, 'utf-8')
+      })
+    );
+
+    console.log(`[Solana Devnet] Broadcasting real Passport transaction with signer ${signer.publicKey.toBase58()}...`);
+    const txSig = await sendAndConfirmTransaction(solanaConnection, transaction, [signer], {
+      commitment: 'confirmed'
+    });
+
+    const parsedTx = await solanaConnection.getParsedTransaction(txSig, 'confirmed').catch(() => null);
+    const slot = parsedTx?.slot || (await solanaConnection.getSlot('confirmed').catch(() => 0));
+
+    console.log(`[Solana Devnet] Passport on-chain confirmed! Tx: ${txSig}, Slot: ${slot}`);
 
     return res.json({
       status: 'CONFIRMED',
       cluster: 'devnet',
-      txHash: txSignature,
+      txHash: txSig,
       certificateId,
-      mintAddress: `Pet${Math.random().toString(36).substring(2, 10).toUpperCase()}11111111111111111111111`,
+      ownerAddress: targetPubkey.toBase58(),
+      signerAddress: signer.publicKey.toBase58(),
+      slot,
+      explorerUrl: `https://explorer.solana.com/tx/${txSig}?cluster=devnet`,
+      solscanUrl: `https://solscan.io/tx/${txSig}?cluster=devnet`,
       metadataUri: `https://arweave.net/canine-whisperer-passport-${dogProfile?.id || 'demo'}`,
-      timestamp: new Date().toISOString(),
-      blockSlot: 284910283 + Math.floor(Math.random() * 1000)
+      timestamp: new Date().toISOString()
     });
   } catch (error: any) {
-    res.status(500).json({ error: 'Failed to mint Solana passport' });
+    console.error('Error minting Solana passport:', error);
+    res.status(500).json({ error: error.message || 'Failed to mint Solana passport' });
+  }
+});
+
+// Issue Verifiable On-Chain Canine Good Citizen (CGC) Certificate
+app.post('/api/solana/issue-certificate', async (req, res) => {
+  try {
+    const { dogProfile, badgeLevel = 'Diamond', title, traits } = req.body;
+    await ensureSolFunding(serverAuthorityKeypair);
+
+    const certId = `SOL-CGC-${Math.floor(100000 + Math.random() * 900000)}`;
+    const certPayload = {
+      protocol: 'CANINE_AI_WHISPERER_CGC',
+      action: 'ISSUE_VERIFIABLE_CREDENTIAL',
+      certificateId: certId,
+      dogName: dogProfile?.name || 'Canine',
+      breed: dogProfile?.breed || 'Canine',
+      title: title || 'Canine Good Citizen (CGC) Verified Credential',
+      badgeLevel,
+      traits: traits || [
+        { trait_type: 'Reactivity Tolerance', value: '98/100' },
+        { trait_type: 'Acoustic Whistle Recall', value: 'Level 4' },
+        { trait_type: 'Desensitization Score', value: 'Grade A' }
+      ],
+      issuer: 'CanineWhisper Verified Authority',
+      timestamp: new Date().toISOString()
+    };
+
+    const transaction = new Transaction().add(
+      new TransactionInstruction({
+        keys: [{ pubkey: serverAuthorityKeypair.publicKey, isSigner: true, isWritable: true }],
+        programId: MEMO_PROGRAM_ID,
+        data: Buffer.from(JSON.stringify(certPayload), 'utf-8')
+      })
+    );
+
+    const txSig = await sendAndConfirmTransaction(solanaConnection, transaction, [serverAuthorityKeypair], {
+      commitment: 'confirmed'
+    });
+
+    return res.json({
+      status: 'CONFIRMED',
+      cluster: 'devnet',
+      txHash: txSig,
+      certificateId: certId,
+      signature: `ed25519:${txSig.substring(0, 32)}...`,
+      explorerUrl: `https://explorer.solana.com/tx/${txSig}?cluster=devnet`,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    console.error('Error issuing certificate:', error);
+    res.status(500).json({ error: error.message || 'Failed to issue Solana certificate' });
+  }
+});
+
+// Record On-Chain Behavior Quest Milestone (TREATS Reward on Devnet)
+app.post('/api/solana/record-quest', async (req, res) => {
+  try {
+    const { questTitle, treatsEarned, dogProfile } = req.body;
+    await ensureSolFunding(serverAuthorityKeypair);
+
+    const questPayload = {
+      protocol: 'CANINE_AI_WHISPERER_REWARDS',
+      action: 'RECORD_BEHAVIORAL_QUEST',
+      questTitle: questTitle || 'Behavioral Milestone',
+      treatsEarned: treatsEarned || 15,
+      dogName: dogProfile?.name || 'Canine',
+      timestamp: new Date().toISOString()
+    };
+
+    const transaction = new Transaction().add(
+      new TransactionInstruction({
+        keys: [{ pubkey: serverAuthorityKeypair.publicKey, isSigner: true, isWritable: true }],
+        programId: MEMO_PROGRAM_ID,
+        data: Buffer.from(JSON.stringify(questPayload), 'utf-8')
+      })
+    );
+
+    const txSig = await sendAndConfirmTransaction(solanaConnection, transaction, [serverAuthorityKeypair], {
+      commitment: 'confirmed'
+    });
+
+    return res.json({
+      status: 'CONFIRMED',
+      cluster: 'devnet',
+      txHash: txSig,
+      treatsEarned,
+      explorerUrl: `https://explorer.solana.com/tx/${txSig}?cluster=devnet`,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    console.error('Error recording quest on Solana:', error);
+    res.status(500).json({ error: error.message || 'Failed to record quest on Solana' });
   }
 });
 

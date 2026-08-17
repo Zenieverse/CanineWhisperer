@@ -42,6 +42,7 @@ export const VisionDecoder: React.FC<VisionDecoderProps> = ({
   const [isPlayingAudio, setIsPlayingAudio] = useState<boolean>(false);
   const [activeFrequency, setActiveFrequency] = useState<number | null>(null);
   const [streamedToSnowflake, setStreamedToSnowflake] = useState<boolean>(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -50,6 +51,7 @@ export const VisionDecoder: React.FC<VisionDecoderProps> = ({
   // Start Web Camera
   const startCamera = async () => {
     try {
+      setCameraError(null);
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
       });
@@ -59,9 +61,9 @@ export const VisionDecoder: React.FC<VisionDecoderProps> = ({
         videoRef.current.play();
       }
       setIsCameraActive(true);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Camera access error:', err);
-      alert('Could not access camera. Please ensure permissions are granted or use photo upload.');
+      setCameraError('Camera access unavailable or blocked. You can upload any canine photo or use the clinical case studies below.');
     }
   };
 
@@ -204,6 +206,22 @@ export const VisionDecoder: React.FC<VisionDecoderProps> = ({
 
   return (
     <div className="space-y-6">
+      {/* Camera Error Notification */}
+      {cameraError && (
+        <div className="p-3.5 bg-amber-50 border border-amber-300 text-amber-900 text-xs font-mono flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="font-bold">⚠️ Notice:</span>
+            <span>{cameraError}</span>
+          </div>
+          <button
+            onClick={() => setCameraError(null)}
+            className="text-[10px] font-bold uppercase underline cursor-pointer"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* Top Banner / Introduction */}
       <div className="bg-white border border-[#1A1A1A] p-6 shadow-sm relative">
         <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">

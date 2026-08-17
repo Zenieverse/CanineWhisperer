@@ -37,6 +37,7 @@ export const BarkAudioDecoder: React.FC<BarkAudioDecoderProps> = ({
   const [isPlayingAudio, setIsPlayingAudio] = useState<boolean>(false);
   const [triggerContext, setTriggerContext] = useState<string>('');
   const [activeAcousticCue, setActiveAcousticCue] = useState<boolean>(false);
+  const [micError, setMicError] = useState<string | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -96,9 +97,10 @@ export const BarkAudioDecoder: React.FC<BarkAudioDecoderProps> = ({
       timerIntervalRef.current = window.setInterval(() => {
         setRecordingSeconds((prev) => prev + 1);
       }, 1000);
-    } catch (err) {
+      setMicError(null);
+    } catch (err: any) {
       console.error('Microphone error:', err);
-      alert('Microphone access denied. You can still test with preset canine audio recordings!');
+      setMicError('Microphone permission not granted or unavailable. You can also analyze with preset canine vocalizations below.');
     }
   };
 
@@ -223,6 +225,22 @@ export const BarkAudioDecoder: React.FC<BarkAudioDecoderProps> = ({
 
   return (
     <div className="space-y-6 font-sans">
+      {/* Microphone Error Notification */}
+      {micError && (
+        <div className="p-3.5 bg-amber-50 border border-amber-300 text-amber-900 text-xs font-mono flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="font-bold">⚠️ Notice:</span>
+            <span>{micError}</span>
+          </div>
+          <button
+            onClick={() => setMicError(null)}
+            className="text-[10px] font-bold uppercase underline cursor-pointer"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* Header Banner */}
       <div className="bg-white border border-[#1A1A1A] p-6 shadow-sm relative">
         <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
